@@ -1,5 +1,22 @@
 # Changelog
 
+## [4.3.2] - 2026-10-21
+
+### Added & Improved
+- **Listening Insights Dashboard:** Introduced a dedicated Listening Insights analytics dashboard tracking cumulative listening duration (hours/minutes), total play counts, unique tracks, and unique artists.
+- **Timeframe Filters & Visual Charts:** Added interactive timeframe filters (Today, 7D, 30D, All Time) paired with daily/interval listening activity bar charts, Top Tracks rankings, and chronologically sorted recent playback history.
+- **Room Database Migration (v15 $\to$ v16):** Implemented schema migration `MIGRATION_15_16` introducing the `listening_events` table indexed by `played_at`, `track_id`, and `artist` with zero data loss and automated playback logging across app sessions.
+- **Offline Local Listening Statistics:** Overhauled the Home and Statistics screens to surface real local playback data when Last.fm is disconnected or unused. Queries local play counts, unique tracks, artists, and albums via `SongPlayStatsRepository` and `LocalStatsRepository` instead of displaying empty placeholder dashes or "No tracks yet".
+- **Discord Rich Presence Wire Format & Stale-Progress Fix:** Nullified Discord activity `timestamps` while paused to prevent misleading advancing progress bars in Discord clients while keeping track details and artwork visible.
+- **Discord Playback Lifecycle Synchronization:** Explicitly clears Discord presence upon natural track completion, manual stop, playback errors, and playback service termination (`clearStopped = true`). Preserves active Rich Presence when the app is swiped away from Android Recent Apps if audio playback continues in the foreground service.
+
+### Testing & Verification
+- **Test Coverage:** Added comprehensive unit test suites including `ListeningInsightsTest` (11 tests), `LocalStatsRepositoryTest` (10 tests), `DiscordPresenceTest` (24 tests), and `DiscordPresenceManagerLifecycleTest` (4 tests).
+- **Verification Status:** Full unit test suite (`:app:testDebugUnitTest`) verified with **577 tests passing, 0 failures, and 0 skipped** on a clean, uncached run.
+
+### Changed
+- **Version Bump:** Bumped version to `4.3.2` (`versionCode = 27`).
+
 ## [4.3.1] - 2026-10-18
 
 ### Added & Improved
