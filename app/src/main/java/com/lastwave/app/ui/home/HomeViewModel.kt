@@ -225,6 +225,8 @@ class HomeViewModel @Inject constructor(
     private val viewingProfileState: com.lastwave.app.data.repository.ViewingProfileState,
     private val settingsPreferences: com.lastwave.app.data.local.SettingsPreferences,
     private val scrobbleRepository: com.lastwave.app.data.repository.ScrobbleRepository,
+    private val listeningEventDao: com.lastwave.app.data.local.db.ListeningEventDao,
+    private val songPlayStatsRepository: com.lastwave.app.data.repository.SongPlayStatsRepository,
 ) : ViewModel() {
 
     companion object {
@@ -294,6 +296,13 @@ class HomeViewModel @Inject constructor(
                 // Instantly update recent tracks list and scrobble count when a track scrobbles
                 delay(1200L)
                 refreshSilently()
+            }
+        }
+        viewModelScope.launch {
+            listeningEventDao.observeRecentEvents(1).collect {
+                if (_uiState.value.isLocalStatsMode && !_uiState.value.isViewingFriend) {
+                    refreshSilently()
+                }
             }
         }
         viewModelScope.launch {
@@ -418,6 +427,20 @@ class HomeViewModel @Inject constructor(
                     // local stats rather than leaving Stats empty.
                     runCatching { localStatsRepository.load() }.getOrNull()?.let { local ->
                         cachedTopTracks = local.topTracks
+                        val top7 = getLocalPeriodTracks(7)
+                        val top30 = getLocalPeriodTracks(30)
+                        val allCombined = if (local.recentTracks.isNotEmpty()) {
+                            val recentKeys = local.recentTracks.map { it.key }.toSet()
+                            val extra = local.topTracks.filter { it.key !in recentKeys }
+                            local.recentTracks + extra
+                        } else {
+                            local.topTracks
+                        }
+                        val preferredSortMode = if (local.recentTracks.any { it.timestampMillis != null }) {
+                            HomeSortMode.RECENT
+                        } else {
+                            HomeSortMode.MOST_PLAYED
+                        }
                         _uiState.update {
                             it.copy(
                                 isLoading = false,
@@ -425,13 +448,15 @@ class HomeViewModel @Inject constructor(
                                 viewingUsername = username,
                                 stats = local.stats,
                                 nowPlaying = null,
-                                allTracks = local.topTracks,
+                                allTracks = allCombined,
                                 topTracksOverall = local.topTracks,
+                                topTracks7Days = top7,
+                                topTracks30Days = top30,
                                 topArtists = local.topArtists.take(10),
                                 topAlbums = local.topAlbums.take(10),
                                 page = 1,
                                 totalPages = 1,
-                                sortMode = HomeSortMode.MOST_PLAYED,
+                                sortMode = preferredSortMode,
                                 isLocalStatsMode = true,
                                 error = null,
                             )
@@ -441,6 +466,20 @@ class HomeViewModel @Inject constructor(
                         it.copy(isLoading = false, username = username, viewingUsername = username, error = e.message ?: "Couldn't load your data")
                     }
                 },
+            )
+        }
+    }
+
+    private suspend fun getLocalPeriodTracks(days: Int): List<HomeTrack> {
+        val entities = runCatching { songPlayStatsRepository.mostPlayedSince(days = days, limit = 50) }.getOrDefault(emptyList())
+        return entities.map {
+            HomeTrack(
+                name = it.title,
+                artist = it.artist,
+                artworkUrl = it.artworkUrl,
+                timestampMillis = it.lastPlayedAtMillis.takeIf { ts -> ts > 0L },
+                playCount = maxOf(it.playCount, if (it.totalPlayTimeMs > 0L) 1 else 0),
+                videoId = it.videoId,
             )
         }
     }
@@ -468,6 +507,25 @@ class HomeViewModel @Inject constructor(
             return
         }
         cachedTopTracks = local.topTracks
+        val top7 = getLocalPeriodTracks(7)
+        val top30 = getLocalPeriodTracks(30)
+        val allCombined = if (local.recentTracks.isNotEmpty()) {
+            val recentKeys = local.recentTracks.map { it.key }.toSet()
+            val extra = local.topTracks.filter { it.key !in recentKeys }
+            local.recentTracks + extra
+        } else {
+            local.topTracks
+        }
+        val preferredSortMode = if (local.recentTracks.any { it.timestampMillis != null }) {
+            if (_uiState.value.sortMode == HomeSortMode.RECENT || _uiState.value.allTracks.isEmpty()) {
+                HomeSortMode.RECENT
+            } else {
+                _uiState.value.sortMode
+            }
+        } else {
+            HomeSortMode.MOST_PLAYED
+        }
+
         _uiState.update {
             it.copy(
                 isLoading = false,
@@ -475,13 +533,11 @@ class HomeViewModel @Inject constructor(
                 viewingUsername = username,
                 stats = local.stats,
                 nowPlaying = null,
-                // Local tracks carry no timestamps, so default to Most Played
-                // (Recent would filter everything out).
-                sortMode = HomeSortMode.MOST_PLAYED,
-                allTracks = local.topTracks,
+                sortMode = preferredSortMode,
+                allTracks = allCombined,
                 topTracksOverall = local.topTracks,
-                topTracks7Days = emptyList(),
-                topTracks30Days = emptyList(),
+                topTracks7Days = top7,
+                topTracks30Days = top30,
                 topArtists = local.topArtists.take(10),
                 topAlbums = local.topAlbums.take(10),
                 page = 1,
@@ -553,14 +609,25 @@ class HomeViewModel @Inject constructor(
                 try {
                     val local = localStatsRepository.load()
                     cachedTopTracks = local.topTracks
+                    val top7 = getLocalPeriodTracks(7)
+                    val top30 = getLocalPeriodTracks(30)
+                    val allCombined = if (local.recentTracks.isNotEmpty()) {
+                        val recentKeys = local.recentTracks.map { it.key }.toSet()
+                        val extra = local.topTracks.filter { it.key !in recentKeys }
+                        local.recentTracks + extra
+                    } else {
+                        local.topTracks
+                    }
                     val tags = runCatching { tasteProfileProvider.get().topTags.toList() }
                         .getOrDefault(emptyList()).take(8)
                     _uiState.update {
                         it.copy(
                             isRefreshing = false,
                             stats = local.stats,
-                            allTracks = local.topTracks,
+                            allTracks = allCombined,
                             topTracksOverall = local.topTracks,
+                            topTracks7Days = top7,
+                            topTracks30Days = top30,
                             topArtists = local.topArtists.take(10),
                             topAlbums = local.topAlbums.take(10),
                             topTags = tags,
@@ -656,14 +723,24 @@ class HomeViewModel @Inject constructor(
         
         if (mode == HomeSortMode.LAST_7_DAYS && _uiState.value.topTracks7Days.isEmpty()) {
             viewModelScope.launch(Dispatchers.IO) {
-                homeRepository.fetchTopTracksForPeriod("7day", 50, username = target).onSuccess { tracks ->
+                if (_uiState.value.isLocalStatsMode) {
+                    val tracks = getLocalPeriodTracks(7)
                     _uiState.update { it.copy(topTracks7Days = tracks) }
+                } else {
+                    homeRepository.fetchTopTracksForPeriod("7day", 50, username = target).onSuccess { tracks ->
+                        _uiState.update { it.copy(topTracks7Days = tracks) }
+                    }
                 }
             }
         } else if (mode == HomeSortMode.LAST_30_DAYS && _uiState.value.topTracks30Days.isEmpty()) {
             viewModelScope.launch(Dispatchers.IO) {
-                homeRepository.fetchTopTracksForPeriod("1month", 50, username = target).onSuccess { tracks ->
+                if (_uiState.value.isLocalStatsMode) {
+                    val tracks = getLocalPeriodTracks(30)
                     _uiState.update { it.copy(topTracks30Days = tracks) }
+                } else {
+                    homeRepository.fetchTopTracksForPeriod("1month", 50, username = target).onSuccess { tracks ->
+                        _uiState.update { it.copy(topTracks30Days = tracks) }
+                    }
                 }
             }
         }
@@ -758,16 +835,32 @@ class HomeViewModel @Inject constructor(
                     if (!_uiState.value.isViewingFriend) {
                         runCatching { localStatsRepository.load() }.getOrNull()?.let { local ->
                             cachedTopTracks = local.topTracks
+                            val top7 = getLocalPeriodTracks(7)
+                            val top30 = getLocalPeriodTracks(30)
+                            val allCombined = if (local.recentTracks.isNotEmpty()) {
+                                val recentKeys = local.recentTracks.map { it.key }.toSet()
+                                val extra = local.topTracks.filter { it.key !in recentKeys }
+                                local.recentTracks + extra
+                            } else {
+                                local.topTracks
+                            }
+                            val preferredSortMode = if (local.recentTracks.any { it.timestampMillis != null }) {
+                                HomeSortMode.RECENT
+                            } else {
+                                HomeSortMode.MOST_PLAYED
+                            }
                             _uiState.update {
                                 it.copy(
                                     isLoading = false,
                                     stats = local.stats,
                                     nowPlaying = null,
-                                    allTracks = local.topTracks,
+                                    allTracks = allCombined,
                                     topTracksOverall = local.topTracks,
+                                    topTracks7Days = top7,
+                                    topTracks30Days = top30,
                                     topArtists = local.topArtists.take(10),
                                     topAlbums = local.topAlbums.take(10),
-                                    sortMode = HomeSortMode.MOST_PLAYED,
+                                    sortMode = preferredSortMode,
                                     isLocalStatsMode = true,
                                     error = null,
                                 )
@@ -790,11 +883,22 @@ class HomeViewModel @Inject constructor(
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching { localStatsRepository.load() }.onSuccess { local ->
                     cachedTopTracks = local.topTracks
+                    val top7 = getLocalPeriodTracks(7)
+                    val top30 = getLocalPeriodTracks(30)
+                    val allCombined = if (local.recentTracks.isNotEmpty()) {
+                        val recentKeys = local.recentTracks.map { it.key }.toSet()
+                        val extra = local.topTracks.filter { it.key !in recentKeys }
+                        local.recentTracks + extra
+                    } else {
+                        local.topTracks
+                    }
                     _uiState.update {
                         it.copy(
                             stats = local.stats,
-                            allTracks = local.topTracks,
+                            allTracks = allCombined,
                             topTracksOverall = local.topTracks,
+                            topTracks7Days = top7,
+                            topTracks30Days = top30,
                             topArtists = local.topArtists.take(10),
                             topAlbums = local.topAlbums.take(10),
                         )

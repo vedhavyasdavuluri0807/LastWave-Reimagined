@@ -172,6 +172,7 @@ fun HomeScreen(
     onOpenGenres: () -> Unit,
     onOpenFriends: () -> Unit,
     onOpenDownloads: () -> Unit = {},
+    onOpenListeningInsights: () -> Unit = {},
     viewModel: HomeViewModel = hiltViewModel(),
     artistAlbumNavigator: com.lastwave.app.ui.navigation.ArtistAlbumNavigator = hiltViewModel<ArtistAlbumNavBridgeHome>().navigator,
 ) {
@@ -194,6 +195,7 @@ fun HomeScreen(
                     title = "Statistics",
                     modifier = Modifier.adaptiveContentWidth(maxWidth = 860.dp),
                     actions = {
+                        HeaderActionIcon(Icons.Filled.BarChart, "Listening Insights", onOpenListeningInsights)
                         HeaderActionIcon(Icons.Filled.Download, "Downloads", onOpenDownloads)
                         HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
                         IconButton(onClick = onOpenSettings) {
@@ -253,6 +255,7 @@ fun HomeScreen(
                     // Honest label: local Room aggregates are plays, not global scrobbles.
                     headlineLabel = if (uiState.isLocalStatsMode && !uiState.isViewingFriend) "Plays" else "Scrobbles",
                     onOpenGenres = onOpenGenres,
+                    onOpenListeningInsights = onOpenListeningInsights,
                     modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 0.dp),
                 )
                 Spacer(Modifier.height(12.dp))
@@ -748,6 +751,7 @@ private fun StatsCard(
     artistCount: Long,
     albumCount: Long,
     onOpenGenres: () -> Unit,
+    onOpenListeningInsights: () -> Unit = {},
     modifier: Modifier = Modifier,
     headlineLabel: String = "Scrobbles",
 ) {
@@ -814,6 +818,46 @@ private fun StatsCard(
                     StatPill("Artists", artistCount, Modifier.weight(1f))
                     StatPill("Albums", albumCount, Modifier.weight(1f))
                 }
+
+                Spacer(Modifier.height(10.dp))
+
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.7f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenListeningInsights),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.BarChart,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                "Listening Insights & Analytics",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "Open Listening Insights",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
+                }
             }
         }
     }
@@ -857,7 +901,7 @@ private fun StatPill(label: String, value: Long, modifier: Modifier = Modifier) 
     }
 }
 
-private fun formatCount(value: Long): String = if (value <= 0) "—" else "%,d".format(value)
+private fun formatCount(value: Long): String = if (value < 0) "—" else "%,d".format(value)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

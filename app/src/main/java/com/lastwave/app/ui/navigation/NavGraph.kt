@@ -286,6 +286,9 @@ fun LastWaveNavHost(
                 onOpenPodcastShow = { showId ->
                     navController.navigate(Screen.PodcastShow.createRoute(showId))
                 },
+                onOpenListeningInsights = {
+                    navController.navigate(Screen.ListeningInsights.route)
+                },
             )
         }
 
@@ -409,6 +412,17 @@ fun LastWaveNavHost(
                     onOpenYouTubeLogin = { navController.navigate(Screen.YouTubeLogin.route) },
                     onOpenSpotifyLogin = { navController.navigate(Screen.SpotifyLogin.route) },
                     onOpenExternalImport = { navController.navigate(Screen.ExternalPlaylistImport.route) },
+                )
+            }
+        }
+
+        composable(Screen.ListeningInsights.route) {
+            PredictiveBackScreen(onBack = { navController.popBackStack() }) {
+                com.lastwave.app.ui.insights.ListeningInsightsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenArtist = { artist ->
+                        navController.navigate(Screen.ArtistDetail.createRoute(artist))
+                    },
                 )
             }
         }

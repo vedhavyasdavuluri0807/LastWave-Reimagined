@@ -14,8 +14,9 @@ import com.lastwave.app.data.podcast.PodcastProgressEntity
         SongPlayStatsEntity::class,
         RelatedGraphEdgeEntity::class,
         PodcastProgressEntity::class,
+        ListeningEventEntity::class,
     ],
-    version = 15,
+    version = 16,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -26,4 +27,5 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun songPlayStatsDao(): SongPlayStatsDao
     abstract fun relatedGraphDao(): RelatedGraphDao
     abstract fun podcastProgressDao(): PodcastProgressDao
+    abstract fun listeningEventDao(): ListeningEventDao
 }

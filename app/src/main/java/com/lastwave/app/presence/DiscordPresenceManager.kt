@@ -62,6 +62,10 @@ class DiscordPresenceManager @Inject constructor(
     private var lastAttemptMs = 0L
     private var lastKey = ""
     private var lastPushMs = 0L
+    @Volatile private var isPlaybackStopped = !DiscordPresence.isPlayingForPresence(musicPlayer.state.value)
+    internal var transportFactory: ((Context) -> DiscordTransport?)? = null
+    internal var clock: () -> Long = { SystemClock.elapsedRealtime() }
+    var dispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default
     private val deferredArtwork = DeferredArtworkLookup(
         scope = applicationScope,
         source = "discord",
@@ -81,7 +85,7 @@ class DiscordPresenceManager @Inject constructor(
     fun start() {
         if (started) return
         started = true
-        observer = applicationScope.launch(Dispatchers.Default) {
+        observer = applicationScope.launch(dispatcher) {
             try {
                 combine(
                     musicPlayer.state,
@@ -99,27 +103,57 @@ class DiscordPresenceManager @Inject constructor(
                 Log.e(TAG, "Discord presence observer stopped", error)
             }
         }
-        heartbeat = applicationScope.launch(Dispatchers.Default) {
+        heartbeat = applicationScope.launch(dispatcher) {
             while (isActive) {
                 delay(DiscordPresence.PUSH_INTERVAL_MS)
                 val snapshot = musicPlayer.state.value
-                evaluate(snapshot, artworkRepository.resolved.value)
+                if (DiscordPresence.isPlayingForPresence(snapshot) && !isPlaybackStopped) {
+                    evaluate(snapshot, artworkRepository.resolved.value)
+                }
+            }
+        }
+    }
+
+    /**
+     * Clears Discord Rich Presence. When [stopped] is true, marks playback as stopped
+     * to prevent background heartbeat or delayed artwork resolution from republishing
+     * until fresh playback begins.
+     */
+    fun clear(stopped: Boolean = true) {
+        if (stopped) {
+            isPlaybackStopped = true
+        }
+        deferredArtwork.cancel()
+        runCatching {
+            lastKey = ""
+            transport?.clearActivity()
+        }
+        applicationScope.launch(dispatcher) {
+            lock.withLock {
+                clearQuiet()
             }
         }
     }
 
     /** Re-evaluates immediately (settings toggle, or an explicit refresh). */
     fun refresh() {
-        applicationScope.launch(Dispatchers.Default) {
+        applicationScope.launch(dispatcher) {
             evaluate(musicPlayer.state.value, artworkRepository.resolved.value)
         }
     }
 
     private suspend fun evaluate(state: MusicPlayerState, resolvedArt: Map<String, String>) {
-        val now = SystemClock.elapsedRealtime()
+        val now = clock()
         lock.withLock {
             // Disabled or unconfigured: hide anything still on the profile.
             if (!enabled || !DiscordPresence.isConfigured()) {
+                deferredArtwork.cancel()
+                clearQuiet()
+                return
+            }
+            if (DiscordPresence.isPlayingForPresence(state)) {
+                isPlaybackStopped = false
+            } else if (isPlaybackStopped) {
                 deferredArtwork.cancel()
                 clearQuiet()
                 return
@@ -151,8 +185,8 @@ class DiscordPresenceManager @Inject constructor(
                     state
                 }
             val key = DiscordPresence.signature(effectiveState)
-            if (key == lastKey && now - lastPushMs < DiscordPresence.PUSH_INTERVAL_MS) {
-                return // Position ticks must not become frames.
+            if (key == lastKey && (!DiscordPresence.isPlayingForPresence(state) || now - lastPushMs < DiscordPresence.PUSH_INTERVAL_MS)) {
+                return // Position ticks must not become frames, and paused tracks shouldn't churn frames.
             }
             val active = ensureConnected(now)
             if (active == null) {
@@ -170,7 +204,7 @@ class DiscordPresenceManager @Inject constructor(
                 Log.w(TAG, "Discord push rejected; dropping connection")
                 runCatching { active.close() }
                 transport = null
-                lastAttemptMs = SystemClock.elapsedRealtime()
+                lastAttemptMs = clock()
                 return
             }
             lastKey = key
@@ -192,11 +226,11 @@ class DiscordPresenceManager @Inject constructor(
             runCatching { existing.close() }
             transport = null
         }
-        if (now - lastAttemptMs < DiscordPresence.RETRY_INTERVAL_MS) return null
+        if (lastAttemptMs > 0L && now - lastAttemptMs < DiscordPresence.RETRY_INTERVAL_MS) return null
         runCatching { existing?.close() }
         transport = null
         lastAttemptMs = now
-        val fresh = DiscordIpcTransport.connectOrNull(context)
+        val fresh = transportFactory?.invoke(context) ?: DiscordIpcTransport.connectOrNull(context)
         if (fresh == null) {
             Log.w(TAG, "Discord connect failed (app missing/signed-out/refusing?); retry in 15s")
         }
@@ -220,6 +254,8 @@ class DiscordPresenceManager @Inject constructor(
         heartbeat = null
         observer?.cancel()
         observer = null
+        deferredArtwork.cancel()
+        isPlaybackStopped = true
         lock.withLock {
             clearQuiet()
             runCatching { transport?.close() }

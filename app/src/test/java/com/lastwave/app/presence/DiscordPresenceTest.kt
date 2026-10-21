@@ -370,6 +370,28 @@ class DiscordPresenceTest {
     }
 
     @Test
+    fun setActivityFrameExplicitlySetsNullTimestampsWhenPaused() {
+        val pausedActivity = DiscordPresence.buildActivity(state(isPlaying = false), NOW_MS)
+        assertNull(pausedActivity["timestamps"])
+        val frame = Json.parseToJsonElement(
+            DiscordPresence.setActivityFrame(pausedActivity, pid = 4321, nonce = "1"),
+        ).jsonObject
+        val activity = frame["args"]!!.jsonObject["activity"]!!.jsonObject
+        assertTrue(activity["timestamps"] is JsonNull)
+    }
+
+    @Test
+    fun setActivityFramePreservesTimestampsWhenPlaying() {
+        val playingActivity = DiscordPresence.buildActivity(state(isPlaying = true), NOW_MS)
+        val frame = Json.parseToJsonElement(
+            DiscordPresence.setActivityFrame(playingActivity, pid = 4321, nonce = "1"),
+        ).jsonObject
+        val activity = frame["args"]!!.jsonObject["activity"]!!.jsonObject
+        assertTrue(activity["timestamps"] !is JsonNull)
+        assertEquals(NOW_MS / 1000L + 163, activity["timestamps"]!!.jsonObject["end"]!!.jsonPrimitive.long)
+    }
+
+    @Test
     fun shipsTheSameApplicationIdAsTheDesktopClient() {
         assertEquals("1552563991426105414", DiscordPresence.APPLICATION_ID)
         assertTrue(DiscordPresence.isConfigured())

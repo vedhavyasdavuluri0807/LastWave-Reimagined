@@ -102,6 +102,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
     @Inject lateinit var androidAutoLibrary: AndroidAutoMediaLibrary
     @Inject lateinit var trackLikeController: TrackLikeController
     @Inject lateinit var liveTelemetryRepository: com.lastwave.app.data.repository.LiveTelemetryRepository
+    @Inject lateinit var discordPresenceManager: dagger.Lazy<com.lastwave.app.presence.DiscordPresenceManager>
 
     // SupervisorJob stops sibling failure propagation; the handler below
     // additionally stops an unexpected exception in any fire-and-forget
@@ -184,7 +185,10 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
                     override fun onSkipToNext() = musicPlayer.next()
                     override fun onSkipToPrevious() = musicPlayer.previous()
                     override fun onSeekTo(pos: Long) = musicPlayer.seekTo(pos)
-                    override fun onStop() = musicPlayer.stopAndClear()
+                    override fun onStop() {
+                        runCatching { discordPresenceManager.get().clear(stopped = true) }
+                        musicPlayer.stopAndClear()
+                    }
                     override fun onSkipToQueueItem(id: Long) = musicPlayer.seekToQueueItem(id.toInt())
                     override fun onSetShuffleMode(shuffleMode: Int) {
                         musicPlayer.setShuffleEnabled(shuffleMode != PlaybackStateCompat.SHUFFLE_MODE_NONE)
@@ -655,7 +659,10 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
             ACTION_NEXT -> musicPlayer.next()
             ACTION_SHUFFLE -> musicPlayer.toggleShuffle()
             ACTION_REPEAT -> musicPlayer.cycleRepeatMode()
-            ACTION_STOP -> musicPlayer.stopAndClear()
+            ACTION_STOP -> {
+                runCatching { discordPresenceManager.get().clear(stopped = true) }
+                musicPlayer.stopAndClear()
+            }
         }
         return START_STICKY
     }
@@ -677,11 +684,13 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
         // launch. Every other stopAndClear() call site (explicit stop
         // action, notification "stop", media session onStop) is untouched
         // and still clears the session as before.
+        runCatching { discordPresenceManager.get().clear(stopped = true) }
         musicPlayer.stopAndClear(clearSession = false)
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
+        runCatching { discordPresenceManager.get().clear(stopped = true) }
         runCatching { if (playbackWakeLock?.isHeld == true) playbackWakeLock?.release() }
         runCatching { if (playbackWifiLock?.isHeld == true) playbackWifiLock?.release() }
         // The service is the last thing standing in a playback-only session, so

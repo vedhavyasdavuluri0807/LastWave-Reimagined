@@ -8,6 +8,7 @@ import com.lastwave.app.data.local.db.ArtworkCacheDao
 import com.lastwave.app.data.local.db.SavedPlaylistDao
 import com.lastwave.app.data.local.db.RecommendationExclusionDao
 import com.lastwave.app.data.local.db.RelatedGraphDao
+import com.lastwave.app.data.local.db.ListeningEventDao
 import com.lastwave.app.data.podcast.PodcastProgressDao
 import dagger.Module
 import dagger.Provides
@@ -314,6 +315,32 @@ object DatabaseModule {
         }
     }
 
+    val migration15To16 = object : Migration(15, 16) {
+        override fun migrate(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+            database.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `listening_events` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `trackKey` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `artist` TEXT NOT NULL,
+                    `videoId` TEXT,
+                    `artworkUrl` TEXT,
+                    `durationMs` INTEGER NOT NULL,
+                    `completed` INTEGER NOT NULL,
+                    `timestampMillis` INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_listening_events_timestampMillis` ON `listening_events` (`timestampMillis`)",
+            )
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_listening_events_trackKey` ON `listening_events` (`trackKey`)",
+            )
+        }
+    }
+
     @Provides
     @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase =
@@ -335,6 +362,7 @@ object DatabaseModule {
                 migration12To13,
                 migration13To14,
                 migration14To15,
+                migration15To16,
             )
             .build()
 
@@ -370,4 +398,9 @@ object DatabaseModule {
     @Singleton
     fun providePodcastProgressDao(database: AppDatabase): PodcastProgressDao =
         database.podcastProgressDao()
+
+    @Provides
+    @Singleton
+    fun provideListeningEventDao(database: AppDatabase): ListeningEventDao =
+        database.listeningEventDao()
 }

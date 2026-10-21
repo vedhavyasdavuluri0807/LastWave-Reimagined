@@ -34,7 +34,7 @@ class SongPlayStatsRepository @Inject constructor(
                 videoId = videoId ?: existing?.videoId,
                 artworkUrl = artworkUrl ?: existing?.artworkUrl,
                 totalPlayTimeMs = (existing?.totalPlayTimeMs ?: 0L) + listenedMs,
-                playCount = (existing?.playCount ?: 0) + if (completed) 1 else 0,
+                playCount = (existing?.playCount ?: 0) + if (completed || listenedMs >= 5_000L) 1 else 0,
                 lastPlayedAtMillis = System.currentTimeMillis(),
             ),
         )
@@ -52,6 +52,10 @@ class SongPlayStatsRepository @Inject constructor(
             ),
         )
     }
+
+    suspend fun getAllPlayed(): List<SongPlayStatsEntity> = dao.getAllPlayed()
+
+    suspend fun getAllRecent(): List<SongPlayStatsEntity> = dao.getAllRecent()
 
     suspend fun mostPlayedSince(days: Int = 30, limit: Int = 100): List<SongPlayStatsEntity> =
         dao.mostPlayedSince(System.currentTimeMillis() - days * 86_400_000L, limit)

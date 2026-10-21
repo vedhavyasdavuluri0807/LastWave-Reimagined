@@ -234,10 +234,12 @@ class MusicPlayer @Inject constructor(
     private val usbDacMonitor: UsbDacMonitor,
     private val exclusiveUsbOutput: ExclusiveUsbOutput,
     private val songPlayStatsRepository: dagger.Lazy<com.lastwave.app.data.repository.SongPlayStatsRepository>,
+    private val listeningEventDao: dagger.Lazy<com.lastwave.app.data.local.db.ListeningEventDao>,
     private val internalDirectOutput: InternalDirectOutput,
     private val podcastProgressStore: com.lastwave.app.data.podcast.PodcastProgressStore,
     /** AutoEQ: started with the player so the saved correction is published before playback. */
     private val autoEqController: com.lastwave.app.data.autoeq.AutoEqController,
+    private val discordPresenceManager: dagger.Lazy<com.lastwave.app.presence.DiscordPresenceManager>,
 ) {
     private val appContext = context.applicationContext
     /**
@@ -457,6 +459,12 @@ class MusicPlayer @Inject constructor(
     private var lastCrossfadeResolveIndex = C.INDEX_UNSET
     private var lastCrossfadeLogKey: String? = null
     private var lastCrossfadeLogAtMs = 0L
+
+    /** Listening insights: actual progress accumulator excluding pauses, buffering, and forward-seek jumps. */
+    private var accumulatedListenMs = 0L
+    private var lastAccumulatedPosMs = -1L
+    private var accumulatedTrackKey: String? = null
+
     private val _state = MutableStateFlow(MusicPlayerState())
     val state: StateFlow<MusicPlayerState> = _state.asStateFlow()
     val chromeState: StateFlow<PlaybackChromeState> = state
@@ -730,6 +738,12 @@ class MusicPlayer @Inject constructor(
         } else 1.0
         val completedNaturally = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || playedRatio >= 0.85
         val wasSkip = !completedNaturally
+        val actualListenedMs = if (accumulatedListenMs > 0L) accumulatedListenMs else previousPositionMs
+        val isMeaningfulPlay = actualListenedMs >= 5_000L || completedNaturally
+        accumulatedListenMs = 0L
+        lastAccumulatedPosMs = -1L
+        accumulatedTrackKey = null
+
         applicationScope.launch(Dispatchers.IO) {
             val repo = songPlayStatsRepository.get()
             repo.recordListenedMs(
@@ -742,6 +756,23 @@ class MusicPlayer @Inject constructor(
             )
             if (wasSkip) {
                 repo.recordSkip(previousTrack.title, previousTrack.artist, previousTrack.videoId)
+            }
+            if (isMeaningfulPlay && previousTrack.title.isNotBlank() && previousTrack.artist.isNotBlank()) {
+                val key = "${previousTrack.title.trim()}|${previousTrack.artist.trim()}".lowercase()
+                runCatching {
+                    listeningEventDao.get().insert(
+                        com.lastwave.app.data.local.db.ListeningEventEntity(
+                            trackKey = key,
+                            title = previousTrack.title,
+                            artist = previousTrack.artist,
+                            videoId = previousTrack.videoId,
+                            artworkUrl = previousTrack.artworkUrl,
+                            durationMs = actualListenedMs,
+                            completed = completedNaturally,
+                            timestampMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                }
             }
         }
     }
@@ -1650,6 +1681,16 @@ class MusicPlayer @Inject constructor(
                     if (playhead != _state.value.positionMs) {
                         _state.update { it.copy(positionMs = playhead) }
                     }
+                    val isSeekingNow = lastSeekTargetMs >= 0L &&
+                        (SystemClock.elapsedRealtime() - lastSeekAtElapsedMs <= SEEK_SETTLE_WINDOW_MS)
+                    val currentTrackKey = _state.value.current?.let { "${it.title.trim()}|${it.artist.trim()}".lowercase() }
+                    accumulatePlayback(
+                        trackKey = currentTrackKey,
+                        currentPos = playhead,
+                        isPlaying = playingNow,
+                        isBuffering = _state.value.isBuffering,
+                        isSeeking = isSeekingNow,
+                    )
                     if (!isCasting && exclusiveUsbOutput.isActive()) {
                         // Never touch ExoPlayer here. Its playback thread holds
                         // the player lock inside the blocking USB write, so a
@@ -2685,6 +2726,7 @@ class MusicPlayer @Inject constructor(
         lastSeekAtElapsedMs = now
         playheadPosMs = target
         playheadWallMs = now
+        lastAccumulatedPosMs = -1L
         exclusiveUsbOutput.noteSeek(target * 1_000L)
         player.seekTo(target)
         _state.update { it.copy(positionMs = target) }
@@ -2700,6 +2742,37 @@ class MusicPlayer @Inject constructor(
         playheadWallMs = now
         playheadKey = key
         playheadMoving = false
+        lastAccumulatedPosMs = -1L
+    }
+
+    private fun accumulatePlayback(
+        trackKey: String?,
+        currentPos: Long,
+        isPlaying: Boolean,
+        isBuffering: Boolean,
+        isSeeking: Boolean,
+    ) {
+        if (trackKey.isNullOrBlank()) {
+            lastAccumulatedPosMs = -1L
+            return
+        }
+        if (trackKey != accumulatedTrackKey) {
+            accumulatedTrackKey = trackKey
+            accumulatedListenMs = 0L
+            lastAccumulatedPosMs = if (isPlaying && !isBuffering && !isSeeking) currentPos else -1L
+            return
+        }
+        if (isSeeking || !isPlaying || isBuffering) {
+            lastAccumulatedPosMs = -1L
+            return
+        }
+        if (lastAccumulatedPosMs >= 0L) {
+            val delta = currentPos - lastAccumulatedPosMs
+            if (delta in 1L..2000L) {
+                accumulatedListenMs += delta
+            }
+        }
+        lastAccumulatedPosMs = currentPos
     }
 
     /**
@@ -4418,6 +4491,7 @@ class MusicPlayer @Inject constructor(
      *   time the app opens.
      */
     fun stopAndClear(clearSession: Boolean = true) = onMain {
+        runCatching { discordPresenceManager.get().clear(stopped = true) }
         if (isCasting) castPlayback?.disconnect()
         cancelCrossfade()
         resolutionRequests.values.forEach { it.second.cancel() }
@@ -4431,6 +4505,7 @@ class MusicPlayer @Inject constructor(
         sleepTimerStep = 0
         // Save the podcast resume position before the queue is torn down.
         checkpointPodcastProgress()
+        recordLocalListenSignal(Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
         player.stop()
         player.clearMediaItems()
         // Shuffle is engine state that survives stop()/clearMediaItems(): without
@@ -5456,6 +5531,7 @@ class MusicPlayer @Inject constructor(
                 }
                 _state.update { it.copy(isPlaying = false, isBuffering = false) }
                 persistPlaybackSession()
+                runCatching { discordPresenceManager.get().clear(stopped = true) }
                 return
             }
         }
@@ -5476,6 +5552,7 @@ class MusicPlayer @Inject constructor(
         if (nextIndex == C.INDEX_UNSET || nextIndex !in 0 until player.mediaItemCount) {
             _state.update { it.copy(isPlaying = false, isBuffering = false) }
             persistPlaybackSession()
+            runCatching { discordPresenceManager.get().clear(stopped = true) }
             return
         }
         resolveAndPlayQueueItem(nextIndex)
@@ -5801,6 +5878,7 @@ class MusicPlayer @Inject constructor(
                     player.pause()
                     player.stop()
                     _state.update { it.copy(isPlaying = false, isBuffering = false, error = "Track unavailable") }
+                    runCatching { discordPresenceManager.get().clear(stopped = true) }
                 } else {
                     playPendingQueueItem(nextIndex, snapshot)
                 }
@@ -5827,6 +5905,7 @@ class MusicPlayer @Inject constructor(
                 _state.update {
                     it.copy(isPlaying = false, isBuffering = false, error = "Track unavailable")
                 }
+                runCatching { discordPresenceManager.get().clear(stopped = true) }
                 return@launch
             }
             ensureForegroundService()

@@ -203,6 +203,7 @@ fun MainShell(
     onOpenDownloads: () -> Unit = {},
     onOpenPodcasts: () -> Unit = {},
     onOpenPodcastShow: (String) -> Unit = {},
+    onOpenListeningInsights: () -> Unit = {},
     mainShellViewModel: MainShellViewModel = hiltViewModel(),
 ) {
     val tabs = MainTab.entries
@@ -266,6 +267,7 @@ fun MainShell(
                         onOpenGenres = onOpenGenres,
                         onOpenFriends = onOpenFriends,
                         onOpenDownloads = onOpenDownloads,
+                        onOpenListeningInsights = onOpenListeningInsights,
                     )
                     MainTab.PLAYLISTS -> PlaylistScreen(onOpenPlaylist = onOpenPlaylist)
                 }

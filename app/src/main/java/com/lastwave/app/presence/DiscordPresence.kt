@@ -264,17 +264,28 @@ object DiscordPresence {
     }
 
     /** `{"cmd":"SET_ACTIVITY", ...}` — the frame the transport hands to Discord. */
-    fun setActivityFrame(activity: JsonObject, pid: Int, nonce: String): String =
-        frame(
+    fun setActivityFrame(activity: JsonObject, pid: Int, nonce: String): String {
+        // When timestamps is absent (e.g. paused or without duration), explicitly serialize
+        // "timestamps": null so Discord's RPC cache clears any previously advancing progress bar.
+        val payloadActivity = if ("timestamps" !in activity) {
+            buildJsonObject {
+                activity.forEach { (k, v) -> put(k, v) }
+                put("timestamps", JsonNull)
+            }
+        } else {
+            activity
+        }
+        return frame(
             buildJsonObject {
                 put("cmd", "SET_ACTIVITY")
                 put("args", buildJsonObject {
                     put("pid", pid)
-                    put("activity", activity)
+                    put("activity", payloadActivity)
                 })
                 put("nonce", nonce)
             },
         )
+    }
 
     /**
      * The clear frame. Discord treats a null activity as "hide the card", so
